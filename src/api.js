@@ -51,18 +51,14 @@ export function fetchSharedBoard(shareToken) {
   return requestJson(`/api/shared/${encodeURIComponent(shareToken)}`);
 }
 
-export function uploadImages(boardId, files, manifest) {
+export function uploadImage(boardId, file, manifest, options = {}) {
   const formData = new FormData();
+  formData.append('images', file);
+  formData.append('manifest', JSON.stringify([manifest]));
 
-  files.forEach((file) => {
-    formData.append('images', file);
-  });
-
-  formData.append('manifest', JSON.stringify(manifest));
-
-  return requestJson(`/api/boards/${encodeURIComponent(boardId)}/uploads`, {
-    method: 'POST',
+  return requestUploadJson(`/api/boards/${encodeURIComponent(boardId)}/uploads`, {
     body: formData,
+    onProgress: options.onProgress,
   });
 }
 
@@ -112,4 +108,56 @@ export function regenerateShare(boardId) {
   return requestJson(`/api/boards/${encodeURIComponent(boardId)}/share/regenerate`, {
     method: 'POST',
   });
+}
+
+function requestUploadJson(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open(options.method || 'POST', url);
+    xhr.responseType = 'text';
+    xhr.withCredentials = true;
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!options.onProgress || !event.lengthComputable) {
+        return;
+      }
+
+      const nextProgress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+      options.onProgress(nextProgress);
+    });
+
+    xhr.addEventListener('load', () => {
+      const payload = parseJsonResponse(xhr.responseText);
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+
+      reject(new Error(payload?.message || 'The upload could not be completed.'));
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('The upload could not be completed.'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      reject(new Error('The upload was interrupted.'));
+    });
+
+    xhr.send(options.body);
+  });
+}
+
+function parseJsonResponse(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }

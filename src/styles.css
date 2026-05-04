@@ -526,6 +526,87 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.upload-panel {
+  backdrop-filter: blur(16px);
+  background: rgba(10, 11, 15, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  bottom: 18px;
+  display: grid;
+  gap: 8px;
+  left: 18px;
+  max-width: min(360px, calc(100vw - 36px));
+  padding: 10px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 1080;
+}
+
+.upload-panel__item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+}
+
+.upload-panel__item.is-done {
+  border-color: rgba(109, 192, 142, 0.26);
+}
+
+.upload-panel__item.is-error {
+  border-color: rgba(255, 98, 98, 0.2);
+}
+
+.upload-panel__header {
+  align-items: baseline;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.upload-panel__name {
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-panel__status {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.upload-panel__track {
+  background: rgba(255, 255, 255, 0.08);
+  height: 5px;
+  overflow: hidden;
+  position: relative;
+}
+
+.upload-panel__fill {
+  background: rgba(255, 255, 255, 0.78);
+  height: 100%;
+  transition: width 120ms linear, background 160ms ease;
+}
+
+.upload-panel__item.is-done .upload-panel__fill {
+  background: rgba(109, 192, 142, 0.9);
+}
+
+.upload-panel__item.is-error .upload-panel__fill {
+  background: rgba(255, 98, 98, 0.92);
+}
+
+.upload-panel__error {
+  color: rgba(255, 177, 177, 0.92);
+  display: block;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
 .status-pill {
   background: rgba(10, 11, 15, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -578,6 +659,12 @@ button:disabled {
     left: 12px;
     max-width: calc(100vw - 24px);
     top: 12px;
+  }
+
+  .upload-panel {
+    bottom: 12px;
+    left: 12px;
+    max-width: calc(100vw - 24px);
   }
 
   .readonly-pill {

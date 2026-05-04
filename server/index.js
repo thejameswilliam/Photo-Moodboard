@@ -7,6 +7,11 @@ import express from 'express';
 import multer from 'multer';
 
 import {
+  MAX_UPLOAD_FILE_SIZE,
+  MAX_UPLOAD_FILE_SIZE_MB,
+  validateUploadCandidate,
+} from '../shared/uploadValidation.js';
+import {
   createExpiredSessionCookie,
   createSessionCookie,
   parseCookies,
@@ -131,6 +136,7 @@ export async function createApp() {
 
     upload.array('images')(request, response, async (uploadError) => {
       if (uploadError) {
+        cleanupUploadedFiles(Array.isArray(request.files) ? request.files : []);
         next(uploadError);
         return;
       }
@@ -222,6 +228,11 @@ export async function createApp() {
 
   app.use((error, _request, response, _next) => {
     if (error instanceof multer.MulterError) {
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        response.status(400).json({ message: `Images must be ${MAX_UPLOAD_FILE_SIZE_MB} MB or smaller.` });
+        return;
+      }
+
       response.status(400).json({ message: error.message });
       return;
     }
@@ -353,15 +364,22 @@ function createUploadMiddleware(config) {
     }),
     limits: {
       files: 40,
-      fileSize: 25 * 1024 * 1024,
+      fileSize: MAX_UPLOAD_FILE_SIZE,
     },
     fileFilter: (_request, file, callback) => {
-      if (file.mimetype.startsWith('image/')) {
+      const validation = validateUploadCandidate({
+        fileName: file.originalname,
+        mimeType: file.mimetype,
+      });
+
+      if (validation.ok) {
         callback(null, true);
         return;
       }
 
-      callback(new Error('Only image files can be added to the mood board.'));
+      const error = new Error(validation.message);
+      error.statusCode = 400;
+      callback(error);
     },
   });
 }

@@ -1,6 +1,10 @@
 import { startTransition, useEffect, useRef, useState } from 'react';
 
 import {
+  DEFAULT_UPLOAD_METADATA,
+  validateUploadCandidate,
+} from '../shared/uploadValidation.js';
+import {
   clearBoard as clearBoardRequest,
   createBoard as createBoardRequest,
   deleteBoard as deleteBoardRequest,
@@ -14,7 +18,7 @@ import {
   regenerateShare as regenerateShareRequest,
   requestMagicLink,
   saveBoard as saveBoardRequest,
-  uploadImages,
+  uploadImage,
 } from './api';
 import { ARRANGE_OPTIONS, getNextZIndex } from './arrange';
 import {
@@ -34,6 +38,8 @@ const TOOLBAR_PADDING_TOP = 54;
 const MIN_ITEM_WIDTH = 96;
 const MIN_ITEM_HEIGHT = 96;
 const MAX_SCALE = 6;
+const UPLOAD_DONE_DISMISS_DELAY = 1400;
+const UPLOAD_ERROR_DISMISS_DELAY = 4800;
 
 export default function App() {
   const boardRef = useRef(null);
@@ -43,6 +49,7 @@ export default function App() {
   const interactionRef = useRef(null);
   const autosaveTimerRef = useRef(null);
   const statusTimerRef = useRef(null);
+  const uploadCleanupTimersRef = useRef(new Map());
   const skipNextAutosaveRef = useRef(true);
   const boardSnapshotRef = useRef(null);
   const boardsRef = useRef([]);
@@ -60,7 +67,7 @@ export default function App() {
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
+  const [uploadItems, setUploadItems] = useState([]);
   const [isBoardActionPending, setIsBoardActionPending] = useState(false);
   const [isBoardsMenuOpen, setIsBoardsMenuOpen] = useState(false);
   const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
@@ -77,6 +84,7 @@ export default function App() {
   const activeLayoutId = readOnly ? sharedLayoutId : activeBoard?.activeLayout;
   const visibleItems = getRenderableItems(activeBoard, activeLayoutId);
   const sortedItems = [...visibleItems].sort((left, right) => left.zIndex - right.zIndex);
+  const isUploading = uploadItems.some((item) => item.status === 'queued' || item.status === 'uploading');
   const isBusy = isUploading || isBoardActionPending;
 
   useEffect(() => {
@@ -137,6 +145,14 @@ export default function App() {
       window.clearTimeout(autosaveTimerRef.current);
       window.clearTimeout(statusTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => () => {
+    for (const timerId of uploadCleanupTimersRef.current.values()) {
+      window.clearTimeout(timerId);
+    }
+
+    uploadCleanupTimersRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -426,6 +442,7 @@ export default function App() {
       setIsShareMenuOpen(false);
       setSelectedItemId(null);
       setMissingIds([]);
+      clearUploadIndicators();
       setSharedBoard(prepared.board);
       setSharedLayoutId(prepared.board.activeLayout || DEFAULT_LAYOUT_ID);
       setStatus(null);
@@ -503,6 +520,7 @@ export default function App() {
     setIsShareMenuOpen(false);
     setSelectedItemId(null);
     setMissingIds([]);
+    clearUploadIndicators();
     setSharedBoard(null);
     setBoard(nextBoard);
     setCurrentBoardId(nextBoard.id);
@@ -676,10 +694,9 @@ export default function App() {
     dragDepthRef.current = 0;
     setIsDraggingFiles(false);
 
-    const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith('image/'));
+    const files = Array.from(event.dataTransfer.files || []);
 
     if (!files.length) {
-      setStatus({ type: 'error', message: 'Only image files can be added to the board.' });
       return;
     }
 
@@ -687,37 +704,117 @@ export default function App() {
       return;
     }
 
+    const uploadBatch = files.map((file) => ({
+      entryId: crypto.randomUUID(),
+      file,
+    }));
+
+    setUploadItems((currentItems) => [
+      ...currentItems,
+      ...uploadBatch.map(({ entryId, file }) => createUploadItem(entryId, file.name)),
+    ]);
+
+    const validUploads = [];
+    let rejectedCount = 0;
+
+    for (const batchEntry of uploadBatch) {
+      const validation = validateUploadCandidate({
+        fileName: batchEntry.file.name,
+        mimeType: batchEntry.file.type,
+        size: batchEntry.file.size,
+      });
+
+      if (!validation.ok) {
+        rejectedCount += 1;
+        updateUploadItem(batchEntry.entryId, {
+          status: 'error',
+          errorMessage: validation.message,
+        });
+        scheduleUploadItemRemoval(batchEntry.entryId, UPLOAD_ERROR_DISMISS_DELAY);
+        continue;
+      }
+
+      validUploads.push(batchEntry);
+    }
+
+    if (!validUploads.length) {
+      setStatus({
+        type: 'error',
+        message: rejectedCount === 1 ? 'That file could not be added.' : 'Those files could not be added.',
+      });
+      return;
+    }
+
     try {
-      setIsUploading(true);
-      setStatus({ type: 'uploading', message: `Adding ${files.length} image${files.length === 1 ? '' : 's'}...` });
+      const manifests = await Promise.all(validUploads.map(({ file }) => loadImageMetadata(file)));
+      const results = await Promise.all(validUploads.map(async (batchEntry, index) => {
+        updateUploadItem(batchEntry.entryId, {
+          status: 'uploading',
+          progress: 0,
+          errorMessage: '',
+        });
 
-      const manifest = await Promise.all(files.map(loadImageMetadata));
-      const result = await uploadImages(currentBoardId, files, manifest);
+        try {
+          const result = await uploadImage(currentBoardId, batchEntry.file, manifests[index], {
+            onProgress: (progress) => {
+              updateUploadItem(batchEntry.entryId, {
+                status: 'uploading',
+                progress,
+              });
+            },
+          });
+          const asset = result?.assets?.[0];
 
-      startTransition(() => {
-        setBoard((currentBoard) => {
-          if (!currentBoard) {
-            return currentBoard;
+          if (!asset) {
+            throw new Error('The image upload finished without returning a new board item.');
           }
 
-          return appendAssetsToLayouts(
-            currentBoard,
-            result.assets,
-            getBoardViewport(boardRef.current),
-          );
-        });
-      });
+          updateUploadItem(batchEntry.entryId, {
+            status: 'done',
+            progress: 100,
+          });
+          scheduleUploadItemRemoval(batchEntry.entryId, UPLOAD_DONE_DISMISS_DELAY);
 
-      const newestItem = result.assets[result.assets.length - 1];
-      setSelectedItemId(newestItem?.id || null);
-      setTransientStatus({
-        type: 'saved',
-        message: `${files.length} image${files.length === 1 ? '' : 's'} added`,
-      });
+          startTransition(() => {
+            setBoard((currentBoard) => {
+              if (!currentBoard) {
+                return currentBoard;
+              }
+
+              return appendAssetsToLayouts(
+                currentBoard,
+                [asset],
+                getBoardViewport(boardRef.current),
+              );
+            });
+          });
+
+          return { ok: true, asset };
+        } catch (error) {
+          updateUploadItem(batchEntry.entryId, {
+            status: 'error',
+            errorMessage: error.message,
+          });
+          scheduleUploadItemRemoval(batchEntry.entryId, UPLOAD_ERROR_DISMISS_DELAY);
+
+          return { ok: false, error };
+        }
+      }));
+      const successfulAssets = results
+        .filter((result) => result.ok)
+        .map((result) => result.asset);
+
+      if (successfulAssets.length > 0) {
+        setSelectedItemId(successfulAssets[successfulAssets.length - 1].id);
+        setTransientStatus({
+          type: 'saved',
+          message: `${successfulAssets.length} image${successfulAssets.length === 1 ? '' : 's'} added`,
+        });
+      } else {
+        setStatus({ type: 'error', message: 'No images were added. Check the upload errors and try again.' });
+      }
     } catch (error) {
       setStatus({ type: 'error', message: error.message });
-    } finally {
-      setIsUploading(false);
     }
   }
 
@@ -863,6 +960,38 @@ export default function App() {
     setBoards((currentBoards) => mergeBoardSummary(currentBoards, nextBoard));
   }
 
+  function updateUploadItem(entryId, patch) {
+    setUploadItems((currentItems) => currentItems.map((item) => (
+      item.id === entryId
+        ? { ...item, ...patch }
+        : item
+    )));
+  }
+
+  function scheduleUploadItemRemoval(entryId, delay) {
+    const currentTimerId = uploadCleanupTimersRef.current.get(entryId);
+
+    if (currentTimerId) {
+      window.clearTimeout(currentTimerId);
+    }
+
+    const nextTimerId = window.setTimeout(() => {
+      uploadCleanupTimersRef.current.delete(entryId);
+      setUploadItems((currentItems) => currentItems.filter((item) => item.id !== entryId));
+    }, delay);
+
+    uploadCleanupTimersRef.current.set(entryId, nextTimerId);
+  }
+
+  function clearUploadIndicators() {
+    for (const timerId of uploadCleanupTimersRef.current.values()) {
+      window.clearTimeout(timerId);
+    }
+
+    uploadCleanupTimersRef.current.clear();
+    setUploadItems([]);
+  }
+
   function hasUnsavedChanges() {
     return localChangeVersionRef.current > lastSavedVersionRef.current;
   }
@@ -996,6 +1125,7 @@ export default function App() {
     setIsBoardsMenuOpen(false);
     setIsShareMenuOpen(false);
     setIsDraggingFiles(false);
+    clearUploadIndicators();
   }
 
   if (!sessionState.isLoading && !sessionState.user && !isSharedView) {
@@ -1322,6 +1452,28 @@ export default function App() {
         ) : null}
       </section>
 
+      {uploadItems.length > 0 ? (
+        <div className="upload-panel" aria-live="polite">
+          {uploadItems.map((item) => (
+            <div key={item.id} className={`upload-panel__item is-${item.status}`}>
+              <div className="upload-panel__header">
+                <span className="upload-panel__name">{item.fileName}</span>
+                <span className="upload-panel__status">{getUploadItemStatusLabel(item)}</span>
+              </div>
+              <div className="upload-panel__track">
+                <div
+                  className="upload-panel__fill"
+                  style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}
+                />
+              </div>
+              {item.errorMessage ? (
+                <small className="upload-panel__error">{item.errorMessage}</small>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {status ? (
         <div className={`status-pill is-${status.type}`}>
           {status.message}
@@ -1374,14 +1526,18 @@ function isTypingTarget(target) {
 
 async function loadImageMetadata(file) {
   if ('createImageBitmap' in window) {
-    const bitmap = await createImageBitmap(file);
-    const metadata = {
-      originalWidth: bitmap.width,
-      originalHeight: bitmap.height,
-    };
+    try {
+      const bitmap = await createImageBitmap(file);
+      const metadata = {
+        originalWidth: bitmap.width,
+        originalHeight: bitmap.height,
+      };
 
-    bitmap.close();
-    return metadata;
+      bitmap.close();
+      return metadata;
+    } catch {
+      // Fall through to the Image-based path below.
+    }
   }
 
   const objectUrl = URL.createObjectURL(file);
@@ -1398,6 +1554,8 @@ async function loadImageMetadata(file) {
       originalWidth: image.naturalWidth,
       originalHeight: image.naturalHeight,
     };
+  } catch {
+    return { ...DEFAULT_UPLOAD_METADATA };
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
@@ -1582,4 +1740,30 @@ function normalizeAngle(angle) {
 
 function round(value) {
   return Math.round(value * 100) / 100;
+}
+
+function createUploadItem(id, fileName) {
+  return {
+    id,
+    fileName: fileName || 'Untitled image',
+    progress: 0,
+    status: 'queued',
+    errorMessage: '',
+  };
+}
+
+function getUploadItemStatusLabel(item) {
+  if (item.status === 'done') {
+    return 'Done';
+  }
+
+  if (item.status === 'error') {
+    return 'Error';
+  }
+
+  if (item.status === 'uploading') {
+    return `${Math.max(0, Math.min(100, Math.round(item.progress)))}%`;
+  }
+
+  return 'Queued';
 }

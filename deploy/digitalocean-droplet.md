@@ -46,7 +46,10 @@ Copy [.env.example](/Users/thejameswilliam/Documents/Sites/Moodboard/.env.exampl
 - `DATA_DIR=/var/lib/moodboard`
 - `SQLITE_PATH=/var/lib/moodboard/moodboard.sqlite`
 - `SESSION_SECRET=<long random secret>`
-- SMTP credentials for your mail provider
+- `MAILGUN_API_KEY=<your mailgun API key>`
+- `MAILGUN_DOMAIN=<your sending domain>`
+- `MAILGUN_REGION=us` or `eu`
+- `MAIL_FROM=<verified sender>`
 
 ## 5. Install the systemd unit
 

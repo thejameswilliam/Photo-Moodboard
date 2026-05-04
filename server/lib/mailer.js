@@ -4,6 +4,11 @@ import path from 'node:path';
 import nodemailer from 'nodemailer';
 
 export function createMailer(config) {
+  const hasMailgunConfig = Boolean(
+    config.mailgun.apiKey
+    && config.mailgun.domain
+    && config.mailgun.from,
+  );
   const hasSmtpConfig = Boolean(
     config.smtp.host
     && config.smtp.port
@@ -35,6 +40,22 @@ export function createMailer(config) {
         '',
         `This link expires at ${expiresAt}.`,
       ].join('\n');
+      const html = [
+        '<p>Use this magic link to sign in to Moodboard:</p>',
+        `<p><a href="${escapeHtml(magicLinkUrl)}">${escapeHtml(magicLinkUrl)}</a></p>`,
+        `<p>This link expires at ${escapeHtml(expiresAt)}.</p>`,
+      ].join('');
+
+      if (hasMailgunConfig) {
+        await sendWithMailgun(config, {
+          to: email,
+          subject,
+          text,
+          html,
+        });
+
+        return { previewUrl: null };
+      }
 
       if (transport) {
         await transport.sendMail({
@@ -42,11 +63,7 @@ export function createMailer(config) {
           to: email,
           subject,
           text,
-          html: `
-            <p>Use this magic link to sign in to Moodboard:</p>
-            <p><a href="${escapeHtml(magicLinkUrl)}">${escapeHtml(magicLinkUrl)}</a></p>
-            <p>This link expires at ${escapeHtml(expiresAt)}.</p>
-          `,
+          html,
         });
 
         return { previewUrl: null };
@@ -71,6 +88,46 @@ export function createMailer(config) {
       };
     },
   };
+}
+
+async function sendWithMailgun(config, message) {
+  const baseUrl = config.mailgun.region === 'eu'
+    ? 'https://api.eu.mailgun.net'
+    : 'https://api.mailgun.net';
+  const endpoint = `${baseUrl}/v3/${encodeURIComponent(config.mailgun.domain)}/messages`;
+  const body = new URLSearchParams({
+    from: config.mailgun.from,
+    to: message.to,
+    subject: message.subject,
+    text: message.text,
+    html: message.html,
+  });
+  const credentials = Buffer
+    .from(`api:${config.mailgun.apiKey}`, 'utf8')
+    .toString('base64');
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json')
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => '');
+  const detail = typeof payload === 'string'
+    ? payload
+    : payload?.message || payload?.error || 'Unknown Mailgun error.';
+  const error = new Error(`Mailgun email delivery failed. ${detail}`);
+  error.statusCode = 502;
+  throw error;
 }
 
 function sanitizeEmail(email) {

@@ -68,8 +68,18 @@ export function getConfig() {
       secure: normalizeBoolean(process.env.SMTP_SECURE, false),
       from: process.env.MAIL_FROM?.trim() || '',
     },
+    mailgun: {
+      apiKey: process.env.MAILGUN_API_KEY?.trim() || '',
+      domain: process.env.MAILGUN_DOMAIN?.trim() || '',
+      region: normalizeMailgunRegion(process.env.MAILGUN_REGION),
+      from: process.env.MAIL_FROM?.trim() || '',
+    },
     isProduction,
     cookieSecure,
     trustProxy: true,
   };
+}
+
+function normalizeMailgunRegion(value) {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'eu' ? 'eu' : 'us';
 }

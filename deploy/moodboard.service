@@ -1,0 +1,16 @@
+[Unit]
+Description=Moodboard web app
+After=network.target
+
+[Service]
+Type=simple
+User=moodboard
+Group=www-data
+WorkingDirectory=/srv/moodboard/current
+EnvironmentFile=/etc/moodboard.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

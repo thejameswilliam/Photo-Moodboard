@@ -4,8 +4,15 @@ import {
   clearBoard as clearBoardRequest,
   createBoard as createBoardRequest,
   deleteBoard as deleteBoardRequest,
+  disableShare as disableShareRequest,
+  enableShare as enableShareRequest,
   fetchBoard as fetchBoardRequest,
   fetchBoards,
+  fetchSession,
+  fetchSharedBoard,
+  logout as logoutRequest,
+  regenerateShare as regenerateShareRequest,
+  requestMagicLink,
   saveBoard as saveBoardRequest,
   uploadImages,
 } from './api';
@@ -13,6 +20,7 @@ import { ARRANGE_OPTIONS, getNextZIndex } from './arrange';
 import {
   appendAssetsToLayouts,
   countBoardAssets,
+  DEFAULT_LAYOUT_ID,
   getLayoutItems,
   getVisibleItems,
   prepareBoardForClient,
@@ -30,6 +38,7 @@ const MAX_SCALE = 6;
 export default function App() {
   const boardRef = useRef(null);
   const boardsMenuRef = useRef(null);
+  const shareMenuRef = useRef(null);
   const dragDepthRef = useRef(0);
   const interactionRef = useRef(null);
   const autosaveTimerRef = useRef(null);
@@ -42,7 +51,11 @@ export default function App() {
   const localChangeVersionRef = useRef(0);
   const lastSavedVersionRef = useRef(0);
 
+  const [route, setRoute] = useState(() => getCurrentRoute());
+  const [sessionState, setSessionState] = useState({ isLoading: true, user: null });
   const [board, setBoard] = useState(null);
+  const [sharedBoard, setSharedBoard] = useState(null);
+  const [sharedLayoutId, setSharedLayoutId] = useState(DEFAULT_LAYOUT_ID);
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
@@ -50,8 +63,21 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isBoardActionPending, setIsBoardActionPending] = useState(false);
   const [isBoardsMenuOpen, setIsBoardsMenuOpen] = useState(false);
+  const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
   const [missingIds, setMissingIds] = useState([]);
-  const [status, setStatus] = useState({ type: 'loading', message: 'Loading boards...' });
+  const [status, setStatus] = useState({ type: 'loading', message: 'Checking session...' });
+  const [email, setEmail] = useState('');
+  const [isSendingMagicLink, setIsSendingMagicLink] = useState(false);
+  const [magicLinkState, setMagicLinkState] = useState({ sentTo: '', previewUrl: null, expiresAt: null });
+
+  const isOwnerView = Boolean(sessionState.user) && route.type === 'board';
+  const isSharedView = route.type === 'shared';
+  const readOnly = isSharedView;
+  const activeBoard = readOnly ? sharedBoard : board;
+  const activeLayoutId = readOnly ? sharedLayoutId : activeBoard?.activeLayout;
+  const visibleItems = getRenderableItems(activeBoard, activeLayoutId);
+  const sortedItems = [...visibleItems].sort((left, right) => left.zIndex - right.zIndex);
+  const isBusy = isUploading || isBoardActionPending;
 
   useEffect(() => {
     boardSnapshotRef.current = board;
@@ -66,37 +92,44 @@ export default function App() {
   }, [currentBoardId]);
 
   useEffect(() => {
+    function handlePopState() {
+      setRoute(getCurrentRoute());
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
     let isCancelled = false;
 
-    async function loadWorkspace() {
+    async function loadSession() {
       try {
-        const result = await fetchBoards();
+        const result = await fetchSession();
 
         if (isCancelled) {
           return;
         }
 
-        const initialBoardId = pickInitialBoardId(result.boards);
-
-        if (!initialBoardId) {
-          setStatus({ type: 'error', message: 'No boards were available to load.' });
-          return;
-        }
-
-        await openBoard(initialBoardId, {
-          boardsOverride: result.boards,
-          loadingMessage: 'Loading board...',
+        setSessionState({
+          isLoading: false,
+          user: result.user,
         });
+        setStatus(null);
       } catch (error) {
         if (isCancelled) {
           return;
         }
 
+        setSessionState({
+          isLoading: false,
+          user: null,
+        });
         setStatus({ type: 'error', message: error.message });
       }
     }
 
-    loadWorkspace();
+    loadSession();
 
     return () => {
       isCancelled = true;
@@ -107,7 +140,49 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (sessionState.isLoading) {
+      setStatus({ type: 'loading', message: 'Checking session...' });
+      return;
+    }
+
+    if (isSharedView) {
+      if (sharedBoard && route.shareToken === getShareTokenFromBoard(sharedBoard)) {
+        return;
+      }
+
+      void loadSharedRoute(route.shareToken);
+      return;
+    }
+
+    setSharedBoard(null);
+    setSharedLayoutId(DEFAULT_LAYOUT_ID);
+
+    if (!sessionState.user) {
+      clearOwnerWorkspace();
+      setStatus(route.authError ? { type: 'error', message: route.authError } : null);
+      return;
+    }
+
+    if (route.type === 'board' && board?.id === route.boardId && currentBoardId === route.boardId) {
+      return;
+    }
+
+    void loadOwnerRoute();
+  }, [
+    sessionState.isLoading,
+    sessionState.user,
+    route.type,
+    route.boardId,
+    route.shareToken,
+    route.authError,
+  ]);
+
+  useEffect(() => {
     function handlePointerMove(event) {
+      if (!isOwnerView) {
+        return;
+      }
+
       const interaction = interactionRef.current;
 
       if (!interaction || interaction.pointerId !== event.pointerId) {
@@ -191,11 +266,11 @@ export default function App() {
       window.removeEventListener('pointerup', handlePointerRelease);
       window.removeEventListener('pointercancel', handlePointerRelease);
     };
-  }, []);
+  }, [isOwnerView]);
 
   useEffect(() => {
     function handleKeyDown(event) {
-      if (!selectedItemId || isTypingTarget(event.target)) {
+      if (!isOwnerView || !selectedItemId || isTypingTarget(event.target)) {
         return;
       }
 
@@ -209,22 +284,27 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedItemId]);
+  }, [isOwnerView, selectedItemId]);
 
   useEffect(() => {
-    if (!isBoardsMenuOpen) {
+    if (!isBoardsMenuOpen && !isShareMenuOpen) {
       return undefined;
     }
 
     function handlePointerDown(event) {
-      if (!boardsMenuRef.current?.contains(event.target)) {
+      if (isBoardsMenuOpen && !boardsMenuRef.current?.contains(event.target)) {
         setIsBoardsMenuOpen(false);
+      }
+
+      if (isShareMenuOpen && !shareMenuRef.current?.contains(event.target)) {
+        setIsShareMenuOpen(false);
       }
     }
 
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
         setIsBoardsMenuOpen(false);
+        setIsShareMenuOpen(false);
       }
     }
 
@@ -235,10 +315,10 @@ export default function App() {
       window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isBoardsMenuOpen]);
+  }, [isBoardsMenuOpen, isShareMenuOpen]);
 
   useEffect(() => {
-    if (!board || !currentBoardId) {
+    if (!isOwnerView || !board || !currentBoardId) {
       return undefined;
     }
 
@@ -264,14 +344,104 @@ export default function App() {
       try {
         await saveBoardRequest(currentBoardId, board);
         lastSavedVersionRef.current = Math.max(lastSavedVersionRef.current, saveVersion);
-        setTransientStatus({ type: 'saved', message: 'Saved locally' });
+        setTransientStatus({ type: 'saved', message: 'Saved' });
       } catch (error) {
         setStatus({ type: 'error', message: `Autosave failed. ${error.message}` });
       }
     }, AUTOSAVE_DELAY);
 
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [board, currentBoardId]);
+  }, [board, currentBoardId, isOwnerView]);
+
+  async function loadOwnerRoute() {
+    const requestId = ++loadRequestIdRef.current;
+
+    setIsBoardActionPending(true);
+    setStatus({ type: 'loading', message: 'Loading boards...' });
+
+    try {
+      const result = await fetchBoards();
+
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const targetBoardId = pickInitialBoardId(result.boards, route.boardId);
+
+      if (!targetBoardId) {
+        setStatus({ type: 'error', message: 'No boards were available to load.' });
+        return;
+      }
+
+      if (route.type !== 'board' || route.boardId !== targetBoardId) {
+        navigateTo(toBoardPath(targetBoardId), { replace: true });
+        return;
+      }
+
+      await openBoard(targetBoardId, {
+        boardsOverride: result.boards,
+        loadingMessage: 'Loading board...',
+        historyMode: 'replace',
+      });
+    } catch (error) {
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      if (loadRequestIdRef.current === requestId) {
+        setIsBoardActionPending(false);
+      }
+    }
+  }
+
+  async function loadSharedRoute(shareToken) {
+    if (!shareToken) {
+      setStatus({ type: 'error', message: 'That shared board link is missing.' });
+      setSharedBoard(null);
+      return;
+    }
+
+    const requestId = ++loadRequestIdRef.current;
+
+    setIsBoardActionPending(true);
+    setStatus({ type: 'loading', message: 'Loading shared board...' });
+
+    try {
+      const result = await fetchSharedBoard(shareToken);
+
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const prepared = prepareBoardForClient(result.board, getBoardViewport(boardRef.current));
+      interactionRef.current = null;
+      dragDepthRef.current = 0;
+      setBoard(null);
+      setBoards([]);
+      setCurrentBoardId(null);
+      setIsDraggingFiles(false);
+      setIsBoardsMenuOpen(false);
+      setIsShareMenuOpen(false);
+      setSelectedItemId(null);
+      setMissingIds([]);
+      setSharedBoard(prepared.board);
+      setSharedLayoutId(prepared.board.activeLayout || DEFAULT_LAYOUT_ID);
+      setStatus(null);
+    } catch (error) {
+      if (loadRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setSharedBoard(null);
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      if (loadRequestIdRef.current === requestId) {
+        setIsBoardActionPending(false);
+      }
+    }
+  }
 
   async function openBoard(boardId, options = {}) {
     const requestId = ++loadRequestIdRef.current;
@@ -305,6 +475,7 @@ export default function App() {
       applyLoadedBoard(nextBoard, {
         boardsOverride: options.boardsOverride,
         warning: nextWarning,
+        historyMode: options.historyMode || 'none',
       });
     } catch (error) {
       if (loadRequestIdRef.current !== requestId) {
@@ -329,32 +500,54 @@ export default function App() {
 
     setIsDraggingFiles(false);
     setIsBoardsMenuOpen(false);
+    setIsShareMenuOpen(false);
     setSelectedItemId(null);
     setMissingIds([]);
+    setSharedBoard(null);
     setBoard(nextBoard);
     setCurrentBoardId(nextBoard.id);
     setBoards((currentBoards) => {
       const baseBoards = options.boardsOverride || currentBoards;
       return mergeBoardSummary(baseBoards, nextBoard);
     });
-    replaceBoardIdInUrl(nextBoard.id);
+
+    if (options.historyMode === 'push') {
+      navigateTo(toBoardPath(nextBoard.id), { replace: false });
+    } else if (options.historyMode === 'replace') {
+      navigateTo(toBoardPath(nextBoard.id), { replace: true });
+    }
+
     setStatus(options.warning ? { type: 'warning', message: options.warning } : null);
   }
 
+  function applyServerBoardUpdate(nextBoard, options = {}) {
+    window.clearTimeout(autosaveTimerRef.current);
+    skipNextAutosaveRef.current = true;
+    localChangeVersionRef.current = 0;
+    lastSavedVersionRef.current = 0;
+
+    setBoard(nextBoard);
+    setBoards((currentBoards) => mergeBoardSummary(currentBoards, nextBoard));
+
+    if (options.message) {
+      setTransientStatus({ type: 'saved', message: options.message });
+    }
+  }
+
   async function persistCurrentBoardNow() {
-    const activeBoard = boardSnapshotRef.current;
+    const activeBoardSnapshot = boardSnapshotRef.current;
     const activeBoardId = currentBoardIdRef.current;
 
-    if (!activeBoard || !activeBoardId || !hasUnsavedChanges()) {
+    if (!isOwnerView || !activeBoardSnapshot || !activeBoardId || !hasUnsavedChanges()) {
       return true;
     }
 
     window.clearTimeout(autosaveTimerRef.current);
 
     try {
-      await saveBoardRequest(activeBoardId, activeBoard);
+      await saveBoardRequest(activeBoardId, activeBoardSnapshot);
       lastSavedVersionRef.current = Math.max(lastSavedVersionRef.current, localChangeVersionRef.current);
-      updateBoardSummary(activeBoard);
+      updateBoardSummary(activeBoardSnapshot);
       return true;
     } catch (error) {
       setStatus({ type: 'error', message: `Autosave failed. ${error.message}` });
@@ -374,7 +567,10 @@ export default function App() {
       return;
     }
 
-    await openBoard(boardId, { loadingMessage: 'Loading board...' });
+    await openBoard(boardId, {
+      loadingMessage: 'Loading board...',
+      historyMode: 'push',
+    });
   }
 
   async function handleCreateBoard() {
@@ -389,7 +585,10 @@ export default function App() {
 
     try {
       const result = await createBoardRequest();
-      applyLoadedBoard(result.board, { boardsOverride: result.boards });
+      applyLoadedBoard(result.board, {
+        boardsOverride: result.boards,
+        historyMode: 'push',
+      });
       setTransientStatus({ type: 'saved', message: `${result.board.name} created` });
     } catch (error) {
       setStatus({ type: 'error', message: error.message });
@@ -414,7 +613,7 @@ export default function App() {
 
     try {
       const result = await clearBoardRequest(currentBoardId);
-      applyLoadedBoard(result.board);
+      applyLoadedBoard(result.board, { historyMode: 'replace' });
       setTransientStatus({ type: 'saved', message: `${result.board.name} cleared` });
     } catch (error) {
       setStatus({ type: 'error', message: error.message });
@@ -453,7 +652,10 @@ export default function App() {
 
     try {
       const result = await deleteBoardRequest(boardId, currentBoardId);
-      applyLoadedBoard(result.board, { boardsOverride: result.boards });
+      applyLoadedBoard(result.board, {
+        boardsOverride: result.boards,
+        historyMode: 'replace',
+      });
       setTransientStatus({
         type: 'saved',
         message: isDeletingCurrentBoard ? 'Board deleted. New board ready.' : 'Board deleted',
@@ -466,6 +668,10 @@ export default function App() {
   }
 
   async function handleDrop(event) {
+    if (!isOwnerView) {
+      return;
+    }
+
     event.preventDefault();
     dragDepthRef.current = 0;
     setIsDraggingFiles(false);
@@ -516,6 +722,11 @@ export default function App() {
   }
 
   function handleArrange(mode) {
+    if (readOnly) {
+      setSharedLayoutId(mode);
+      return;
+    }
+
     if (!board || mode === board.activeLayout) {
       return;
     }
@@ -543,7 +754,7 @@ export default function App() {
   }
 
   function handleDragEnter(event) {
-    if (!containsFiles(event.dataTransfer)) {
+    if (!isOwnerView || !containsFiles(event.dataTransfer)) {
       return;
     }
 
@@ -553,7 +764,7 @@ export default function App() {
   }
 
   function handleDragLeave(event) {
-    if (!containsFiles(event.dataTransfer)) {
+    if (!isOwnerView || !containsFiles(event.dataTransfer)) {
       return;
     }
 
@@ -567,10 +778,16 @@ export default function App() {
   }
 
   function handleBackgroundPointerDown() {
-    setSelectedItemId(null);
+    if (!readOnly) {
+      setSelectedItemId(null);
+    }
   }
 
   function startInteraction(event, item, mode) {
+    if (readOnly || !board) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -650,108 +867,383 @@ export default function App() {
     return localChangeVersionRef.current > lastSavedVersionRef.current;
   }
 
-  const isBusy = isUploading || isBoardActionPending;
-  const sortedItems = [...getVisibleItems(board)].sort((left, right) => left.zIndex - right.zIndex);
+  async function handleSendMagicLink(event) {
+    event.preventDefault();
+
+    if (!email.trim()) {
+      setStatus({ type: 'error', message: 'Enter your email to continue.' });
+      return;
+    }
+
+    setIsSendingMagicLink(true);
+    setStatus({ type: 'loading', message: 'Sending magic link...' });
+
+    try {
+      const result = await requestMagicLink(email, getRedirectPathForRoute(route));
+      setMagicLinkState({
+        sentTo: email.trim(),
+        previewUrl: result.previewUrl,
+        expiresAt: result.expiresAt,
+      });
+      setStatus(null);
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsSendingMagicLink(false);
+    }
+  }
+
+  async function handleLogout() {
+    await persistCurrentBoardNow();
+    setIsBoardActionPending(true);
+
+    try {
+      await logoutRequest();
+      clearOwnerWorkspace();
+      setSessionState({ isLoading: false, user: null });
+      navigateTo('/', { replace: false });
+      setStatus(null);
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsBoardActionPending(false);
+    }
+  }
+
+  async function handleEnableShare() {
+    if (!currentBoardId) {
+      return;
+    }
+
+    setIsBoardActionPending(true);
+
+    try {
+      const result = await enableShareRequest(currentBoardId);
+      applyServerBoardUpdate(result.board, { message: 'Share link ready' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsBoardActionPending(false);
+    }
+  }
+
+  async function handleDisableShare() {
+    if (!currentBoardId) {
+      return;
+    }
+
+    setIsBoardActionPending(true);
+
+    try {
+      const result = await disableShareRequest(currentBoardId);
+      applyServerBoardUpdate(result.board, { message: 'Share link disabled' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsBoardActionPending(false);
+    }
+  }
+
+  async function handleRegenerateShare() {
+    if (!currentBoardId) {
+      return;
+    }
+
+    setIsBoardActionPending(true);
+
+    try {
+      const result = await regenerateShareRequest(currentBoardId);
+      applyServerBoardUpdate(result.board, { message: 'Share link refreshed' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error.message });
+    } finally {
+      setIsBoardActionPending(false);
+    }
+  }
+
+  async function handleCopyShareLink() {
+    const shareUrl = board?.sharing?.shareUrl;
+
+    if (!shareUrl) {
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        window.prompt('Copy this share link', shareUrl);
+      }
+
+      setTransientStatus({ type: 'saved', message: 'Share link copied' });
+    } catch {
+      window.prompt('Copy this share link', shareUrl);
+    }
+  }
+
+  function clearOwnerWorkspace() {
+    window.clearTimeout(autosaveTimerRef.current);
+    skipNextAutosaveRef.current = true;
+    interactionRef.current = null;
+    dragDepthRef.current = 0;
+    localChangeVersionRef.current = 0;
+    lastSavedVersionRef.current = 0;
+    setBoard(null);
+    setBoards([]);
+    setCurrentBoardId(null);
+    setSelectedItemId(null);
+    setMissingIds([]);
+    setIsBoardsMenuOpen(false);
+    setIsShareMenuOpen(false);
+    setIsDraggingFiles(false);
+  }
+
+  if (!sessionState.isLoading && !sessionState.user && !isSharedView) {
+    return (
+      <main className="app-shell app-shell--login">
+        <section className="login-panel">
+          <div className="login-panel__copy">
+            <span className="login-panel__eyebrow">Moodboard</span>
+            <h1>Sign in with a magic link</h1>
+            <p>Your boards stay private until you share a read-only link.</p>
+          </div>
+
+          <form className="login-form" onSubmit={handleSendMagicLink}>
+            <label className="login-form__label" htmlFor="email">
+              Email
+            </label>
+            <input
+              id="email"
+              className="login-form__input"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              disabled={isSendingMagicLink}
+            />
+            <button className="login-form__button" type="submit" disabled={isSendingMagicLink}>
+              {isSendingMagicLink ? 'Sending...' : 'Send Magic Link'}
+            </button>
+          </form>
+
+          {magicLinkState.sentTo ? (
+            <div className="login-panel__note">
+              <strong>Check your inbox for {magicLinkState.sentTo}.</strong>
+              <span>The sign-in link expires at {formatShortTimestamp(magicLinkState.expiresAt)}.</span>
+              {magicLinkState.previewUrl ? (
+                <a className="login-panel__link" href={magicLinkState.previewUrl}>
+                  Open the local preview link
+                </a>
+              ) : null}
+            </div>
+          ) : (
+            <div className="login-panel__note">
+              <span>Use the same email any time and we’ll send a fresh sign-in link.</span>
+            </div>
+          )}
+
+          {status ? (
+            <p className={`login-panel__status is-${status.type}`}>{status.message}</p>
+          ) : null}
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${readOnly ? 'app-shell--readonly' : ''}`}>
       <div className="toolbar">
         <div className="toolbar__actions">
-          <div ref={boardsMenuRef} className="boards-menu-anchor">
-            <button
-              className={`toolbar__button ${isBoardsMenuOpen ? 'is-active' : ''}`}
-              type="button"
-              onClick={() => setIsBoardsMenuOpen((currentValue) => !currentValue)}
-            >
-              Boards
-            </button>
+          {isOwnerView ? (
+            <>
+              <div ref={shareMenuRef} className="boards-menu-anchor">
+                <button
+                  className={`toolbar__button ${isShareMenuOpen ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() => {
+                    setIsBoardsMenuOpen(false);
+                    setIsShareMenuOpen((currentValue) => !currentValue);
+                  }}
+                >
+                  Share
+                </button>
 
-            {isBoardsMenuOpen ? (
-              <div className="boards-menu">
-                <div className="boards-menu__header">
-                  <span className="boards-menu__eyebrow">Current board</span>
-                  <strong>{board?.name || 'Loading...'}</strong>
-                </div>
+                {isShareMenuOpen ? (
+                  <div className="boards-menu share-menu">
+                    <div className="boards-menu__header">
+                      <span className="boards-menu__eyebrow">Read-only link</span>
+                      <strong>{board?.sharing?.enabled ? 'Sharing enabled' : 'Private board'}</strong>
+                    </div>
 
-                <div className="boards-menu__actions">
-                  <button
-                    className="boards-menu__action"
-                    type="button"
-                    onClick={handleCreateBoard}
-                    disabled={isBusy}
-                  >
-                    New Board
-                  </button>
-                  <button
-                    className="boards-menu__action"
-                    type="button"
-                    onClick={handleClearBoard}
-                    disabled={isBusy || !board}
-                  >
-                    Clear Board
-                  </button>
-                </div>
+                    {board?.sharing?.enabled ? (
+                      <>
+                        <p className="share-menu__url">{board.sharing.shareUrl}</p>
+                        <div className="boards-menu__actions">
+                          <button
+                            className="boards-menu__action"
+                            type="button"
+                            onClick={handleCopyShareLink}
+                            disabled={isBusy}
+                          >
+                            Copy Link
+                          </button>
+                          <button
+                            className="boards-menu__action"
+                            type="button"
+                            onClick={handleRegenerateShare}
+                            disabled={isBusy}
+                          >
+                            Regenerate Link
+                          </button>
+                          <button
+                            className="boards-menu__action"
+                            type="button"
+                            onClick={handleDisableShare}
+                            disabled={isBusy}
+                          >
+                            Disable Link
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="boards-menu__actions">
+                        <button
+                          className="boards-menu__action"
+                          type="button"
+                          onClick={handleEnableShare}
+                          disabled={isBusy || !board}
+                        >
+                          Create Share Link
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
 
-                <div className="boards-menu__list">
-                  {boards.map((boardSummary) => (
-                    <div
-                      key={boardSummary.id}
-                      className={`boards-menu__row ${boardSummary.id === currentBoardId ? 'is-active' : ''}`}
-                    >
+              <div ref={boardsMenuRef} className="boards-menu-anchor">
+                <button
+                  className={`toolbar__button ${isBoardsMenuOpen ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() => {
+                    setIsShareMenuOpen(false);
+                    setIsBoardsMenuOpen((currentValue) => !currentValue);
+                  }}
+                >
+                  Boards
+                </button>
+
+                {isBoardsMenuOpen ? (
+                  <div className="boards-menu">
+                    <div className="boards-menu__header">
+                      <span className="boards-menu__eyebrow">Current board</span>
+                      <strong>{board?.name || 'Loading...'}</strong>
+                    </div>
+
+                    <div className="boards-menu__actions">
                       <button
-                        className="boards-menu__board"
+                        className="boards-menu__action"
                         type="button"
-                        onClick={() => handleSwitchBoard(boardSummary.id)}
+                        onClick={handleCreateBoard}
                         disabled={isBusy}
                       >
-                        <span>{boardSummary.name}</span>
-                        <small>{boardSummary.itemCount} item{boardSummary.itemCount === 1 ? '' : 's'}</small>
+                        New Board
                       </button>
-
                       <button
-                        className="boards-menu__delete"
+                        className="boards-menu__action"
                         type="button"
-                        aria-label={`Delete ${boardSummary.name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleDeleteBoard(boardSummary.id);
-                        }}
+                        onClick={handleClearBoard}
+                        disabled={isBusy || !board}
+                      >
+                        Clear Board
+                      </button>
+                      <button
+                        className="boards-menu__action"
+                        type="button"
+                        onClick={handleLogout}
                         disabled={isBusy}
                       >
-                        ×
+                        Log Out
                       </button>
                     </div>
-                  ))}
-                </div>
+
+                    <div className="boards-menu__list">
+                      {boards.map((boardSummary) => (
+                        <div
+                          key={boardSummary.id}
+                          className={`boards-menu__row ${boardSummary.id === currentBoardId ? 'is-active' : ''}`}
+                        >
+                          <button
+                            className="boards-menu__board"
+                            type="button"
+                            onClick={() => handleSwitchBoard(boardSummary.id)}
+                            disabled={isBusy}
+                          >
+                            <span>{boardSummary.name}</span>
+                            <small>{boardSummary.itemCount} item{boardSummary.itemCount === 1 ? '' : 's'}</small>
+                          </button>
+
+                          <button
+                            className="boards-menu__delete"
+                            type="button"
+                            aria-label={`Delete ${boardSummary.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleDeleteBoard(boardSummary.id);
+                            }}
+                            disabled={isBusy}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </>
+          ) : null}
 
           {ARRANGE_OPTIONS.map((option) => (
             <button
               key={option.id}
-              className={`toolbar__button ${board?.activeLayout === option.id ? 'is-active' : ''}`}
+              className={`toolbar__button ${activeLayoutId === option.id ? 'is-active' : ''}`}
               type="button"
               onClick={() => handleArrange(option.id)}
-              disabled={!board}
+              disabled={!activeBoard}
             >
               {option.label}
             </button>
           ))}
+
+          {isSharedView && !sessionState.user ? (
+            <button
+              className="toolbar__button"
+              type="button"
+              onClick={() => navigateTo('/', { replace: false })}
+            >
+              Sign In
+            </button>
+          ) : null}
         </div>
       </div>
 
       <section
         ref={boardRef}
-        className={`board-surface ${isDraggingFiles ? 'is-dragging' : ''}`}
+        className={`board-surface ${isDraggingFiles ? 'is-dragging' : ''} ${readOnly ? 'is-readonly' : ''}`}
         onPointerDown={handleBackgroundPointerDown}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragState}
         onDrop={handleDrop}
       >
+        {isSharedView ? (
+          <div className="readonly-pill">Read only</div>
+        ) : null}
+
         {sortedItems.map((item) => {
-          const isSelected = selectedItemId === item.id;
+          const isSelected = !readOnly && selectedItemId === item.id;
           const isMissing = missingIds.includes(item.id);
 
           return (
@@ -764,7 +1256,7 @@ export default function App() {
                 transform: `translate(${item.x}px, ${item.y}px) rotate(${item.rotation}deg)`,
                 zIndex: item.zIndex,
               }}
-              onPointerDown={(event) => startInteraction(event, item, 'drag')}
+              onPointerDown={readOnly ? undefined : (event) => startInteraction(event, item, 'drag')}
             >
               {isMissing ? (
                 <div className="board-item__missing">
@@ -813,10 +1305,10 @@ export default function App() {
           );
         })}
 
-        {board && countBoardAssets(board) === 0 ? (
+        {activeBoard && countBoardAssets(activeBoard) === 0 ? (
           <div className="empty-state">
-            <p>{board.name}</p>
-            <span>Drop images anywhere.</span>
+            <p>{activeBoard.name}</p>
+            <span>{readOnly ? 'This shared board is empty.' : 'Drop images anywhere.'}</span>
           </div>
         ) : null}
 
@@ -837,6 +1329,25 @@ export default function App() {
       ) : null}
     </main>
   );
+}
+
+function getRenderableItems(board, layoutId) {
+  if (!board) {
+    return [];
+  }
+
+  if (!layoutId || board.activeLayout === layoutId) {
+    return getVisibleItems(board);
+  }
+
+  const assetsById = new Map((board.assets || []).map((asset) => [asset.id, asset]));
+
+  return getLayoutItems(board, layoutId)
+    .map((item) => {
+      const asset = assetsById.get(item.id);
+      return asset ? { ...asset, ...item } : null;
+    })
+    .filter(Boolean);
 }
 
 function getBoardViewport(boardElement) {
@@ -923,32 +1434,62 @@ function liftItem(items, itemId) {
   };
 }
 
-function pickInitialBoardId(boards) {
+function getCurrentRoute() {
+  const currentUrl = new URL(window.location.href);
+  const normalizedPath = currentUrl.pathname.replace(/\/+$/, '') || '/';
+  const boardMatch = /^\/boards\/([^/]+)$/.exec(normalizedPath);
+  const sharedMatch = /^\/shared\/([^/]+)$/.exec(normalizedPath);
+
+  if (boardMatch) {
+    return {
+      type: 'board',
+      boardId: decodeURIComponent(boardMatch[1]),
+      authError: currentUrl.searchParams.get('authError'),
+    };
+  }
+
+  if (sharedMatch) {
+    return {
+      type: 'shared',
+      shareToken: decodeURIComponent(sharedMatch[1]),
+      authError: currentUrl.searchParams.get('authError'),
+    };
+  }
+
+  return {
+    type: 'root',
+    authError: currentUrl.searchParams.get('authError'),
+  };
+}
+
+function navigateTo(pathname, options = {}) {
+  const currentUrl = new URL(window.location.href);
+  const nextUrl = new URL(pathname, currentUrl.origin);
+
+  if (nextUrl.pathname === currentUrl.pathname && nextUrl.search === currentUrl.search) {
+    return;
+  }
+
+  if (options.replace) {
+    window.history.replaceState({}, '', nextUrl);
+  } else {
+    window.history.pushState({}, '', nextUrl);
+  }
+
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+function toBoardPath(boardId) {
+  return `/boards/${encodeURIComponent(boardId)}`;
+}
+
+function pickInitialBoardId(boards, requestedBoardId) {
   if (!Array.isArray(boards) || boards.length === 0) {
     return null;
   }
 
-  const requestedBoardId = getBoardIdFromUrl();
-  const requestedBoard = boards.find((board) => board.id === requestedBoardId);
-
+  const requestedBoard = boards.find((entry) => entry.id === requestedBoardId);
   return requestedBoard?.id || boards[0].id;
-}
-
-function getBoardIdFromUrl() {
-  const currentUrl = new URL(window.location.href);
-  return currentUrl.searchParams.get('board');
-}
-
-function replaceBoardIdInUrl(boardId) {
-  const currentUrl = new URL(window.location.href);
-
-  if (boardId) {
-    currentUrl.searchParams.set('board', boardId);
-  } else {
-    currentUrl.searchParams.delete('board');
-  }
-
-  window.history.replaceState({}, '', currentUrl);
 }
 
 function appendWarning(currentWarning, nextWarning) {
@@ -975,6 +1516,7 @@ function toBoardSummary(board) {
     name: board.name,
     updatedAt: board.updatedAt,
     itemCount: countBoardAssets(board),
+    sharing: board.sharing,
   };
 }
 
@@ -989,6 +1531,44 @@ function sortBoardSummaries(boards) {
 
     return right.name.localeCompare(left.name);
   });
+}
+
+function getRedirectPathForRoute(route) {
+  if (route.type === 'board') {
+    return `/boards/${encodeURIComponent(route.boardId)}`;
+  }
+
+  if (route.type === 'shared') {
+    return `/shared/${encodeURIComponent(route.shareToken)}`;
+  }
+
+  return '/';
+}
+
+function getShareTokenFromBoard(board) {
+  const shareUrl = board?.sharing?.shareUrl;
+
+  if (typeof shareUrl !== 'string') {
+    return null;
+  }
+
+  const match = /\/shared\/([^/?#]+)/.exec(shareUrl);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function formatShortTimestamp(value) {
+  const timestamp = Date.parse(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return 'soon';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(timestamp);
 }
 
 function clamp(value, min, max) {

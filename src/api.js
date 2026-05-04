@@ -1,5 +1,8 @@
-async function requestJson(url, options) {
-  const response = await fetch(url, options);
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options,
+  });
   const isJson = response.headers.get('content-type')?.includes('application/json');
   const payload = isJson ? await response.json() : null;
 
@@ -8,6 +11,26 @@ async function requestJson(url, options) {
   }
 
   return payload;
+}
+
+export function fetchSession() {
+  return requestJson('/api/session');
+}
+
+export function requestMagicLink(email, redirectPath) {
+  return requestJson('/api/auth/magic-link', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, redirectPath }),
+  });
+}
+
+export function logout() {
+  return requestJson('/api/auth/logout', {
+    method: 'POST',
+  });
 }
 
 export function fetchBoards() {
@@ -22,6 +45,10 @@ export function createBoard() {
 
 export function fetchBoard(boardId) {
   return requestJson(`/api/boards/${encodeURIComponent(boardId)}`);
+}
+
+export function fetchSharedBoard(shareToken) {
+  return requestJson(`/api/shared/${encodeURIComponent(shareToken)}`);
 }
 
 export function uploadImages(boardId, files, manifest) {
@@ -62,7 +89,27 @@ export function deleteBoard(boardId, currentBoardId) {
     params.set('currentBoardId', currentBoardId);
   }
 
-  return requestJson(`/api/boards/${encodeURIComponent(boardId)}?${params.toString()}`, {
+  const query = params.toString();
+
+  return requestJson(`/api/boards/${encodeURIComponent(boardId)}${query ? `?${query}` : ''}`, {
     method: 'DELETE',
+  });
+}
+
+export function enableShare(boardId) {
+  return requestJson(`/api/boards/${encodeURIComponent(boardId)}/share`, {
+    method: 'POST',
+  });
+}
+
+export function disableShare(boardId) {
+  return requestJson(`/api/boards/${encodeURIComponent(boardId)}/share`, {
+    method: 'DELETE',
+  });
+}
+
+export function regenerateShare(boardId) {
+  return requestJson(`/api/boards/${encodeURIComponent(boardId)}/share/regenerate`, {
+    method: 'POST',
   });
 }

@@ -26,6 +26,10 @@ button {
   font: inherit;
 }
 
+a {
+  color: inherit;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
@@ -35,6 +39,13 @@ button:disabled {
   min-height: 100vh;
   overflow: hidden;
   position: relative;
+}
+
+.app-shell--login {
+  align-items: center;
+  display: grid;
+  justify-items: center;
+  padding: 24px;
 }
 
 .app-shell::before {
@@ -124,6 +135,10 @@ button:disabled {
   top: auto;
 }
 
+.share-menu {
+  min-width: 260px;
+}
+
 .boards-menu__header {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: grid;
@@ -205,6 +220,123 @@ button:disabled {
   padding: 0;
 }
 
+.share-menu__url {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+  padding: 8px;
+}
+
+.login-panel {
+  backdrop-filter: blur(14px);
+  background: rgba(8, 9, 12, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.32);
+  display: grid;
+  gap: 18px;
+  max-width: 460px;
+  padding: 24px;
+  width: min(100%, 460px);
+}
+
+.login-panel__copy {
+  display: grid;
+  gap: 8px;
+}
+
+.login-panel__eyebrow {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.login-panel__copy h1,
+.login-panel__copy p {
+  margin: 0;
+}
+
+.login-panel__copy h1 {
+  font-size: clamp(1.4rem, 4vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.login-panel__copy p {
+  color: rgba(255, 255, 255, 0.64);
+  line-height: 1.5;
+}
+
+.login-form {
+  display: grid;
+  gap: 10px;
+}
+
+.login-form__label {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-form__input,
+.login-form__button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  padding: 11px 12px;
+}
+
+.login-form__input::placeholder {
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.login-form__button {
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.login-form__button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.login-panel__note {
+  color: rgba(255, 255, 255, 0.6);
+  display: grid;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+.login-panel__note strong {
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 600;
+}
+
+.login-panel__link {
+  color: rgba(255, 255, 255, 0.88);
+  text-decoration-color: rgba(255, 255, 255, 0.38);
+}
+
+.login-panel__status {
+  margin: 0;
+  padding-top: 2px;
+}
+
+.login-panel__status.is-error {
+  color: rgba(255, 165, 165, 0.94);
+}
+
 .board-surface {
   height: 100vh;
   overflow: hidden;
@@ -215,6 +347,10 @@ button:disabled {
 
 .board-surface.is-dragging {
   cursor: copy;
+}
+
+.board-surface.is-readonly {
+  cursor: default;
 }
 
 .board-item {
@@ -348,6 +484,20 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.readonly-pill {
+  background: rgba(10, 11, 15, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  left: 18px;
+  padding: 7px 10px;
+  position: fixed;
+  text-transform: uppercase;
+  top: 18px;
+  z-index: 1000;
+}
+
 .drop-overlay {
   align-items: center;
   background: transparent;
@@ -420,9 +570,18 @@ button:disabled {
     right: 0;
   }
 
+  .login-panel {
+    padding: 18px;
+  }
+
   .status-pill {
     left: 12px;
     max-width: calc(100vw - 24px);
+    top: 12px;
+  }
+
+  .readonly-pill {
+    left: 12px;
     top: 12px;
   }
 }

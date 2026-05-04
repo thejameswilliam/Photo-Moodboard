@@ -12,8 +12,10 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "express": "^5.2.1",
     "multer": "^2.1.1",
+    "nodemailer": "^8.0.7",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

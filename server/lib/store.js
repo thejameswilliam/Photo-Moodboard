@@ -364,13 +364,14 @@ export function createStore(config) {
 
     const nextUpdatedAt = now();
     const nextDocument = normalizeBoardDocument(boardPayload, nextUpdatedAt, desiredAssetIds);
+    const nextBoardName = normalizeBoardName(boardPayload?.name, getDefaultBoardName(boardRow.id, userId));
 
     inTransaction(() => {
       db.prepare(`
         UPDATE boards
-        SET board_json = ?, updated_at = ?
+        SET name = ?, board_json = ?, updated_at = ?
         WHERE id = ?
-      `).run(JSON.stringify(nextDocument), nextUpdatedAt, boardId);
+      `).run(nextBoardName, JSON.stringify(nextDocument), nextUpdatedAt, boardId);
 
       const removedAssets = existingAssets.filter((asset) => !desiredAssetIds.has(asset.id));
 
@@ -691,6 +692,32 @@ export function createStore(config) {
     return highest + 1;
   }
 
+  function getDefaultBoardName(boardId, userId) {
+    const boardRow = db.prepare('SELECT name FROM boards WHERE id = ?').get(boardId);
+
+    if (!boardRow) {
+      return `Board ${getNextBoardNumberForUser(userId)}`;
+    }
+
+    const numericMatch = /^Board\s+(\d+)$/i.exec(boardRow.name || '');
+
+    if (numericMatch) {
+      return `Board ${numericMatch[1]}`;
+    }
+
+    const defaultNames = db.prepare(`
+      SELECT name
+      FROM boards
+      WHERE owner_user_id = ?
+    `).all(userId);
+    const highest = defaultNames.reduce((max, row) => {
+      const match = /^Board\s+(\d+)$/i.exec(row.name || '');
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+
+    return `Board ${highest + 1}`;
+  }
+
   function deleteAssetFiles(assetRows) {
     for (const assetRow of assetRows) {
       const absolutePath = path.join(config.uploadsDir, assetRow.storage_path);
@@ -844,6 +871,11 @@ function normalizeLegacyStoragePath(src, boardId) {
   }
 
   return `${boardId}/${path.basename(src || `${crypto.randomUUID()}.bin`)}`;
+}
+
+function normalizeBoardName(value, fallback) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || fallback;
 }
 
 function getLegacyBoardFiles(legacyBoardsDir, legacyBoardPath) {

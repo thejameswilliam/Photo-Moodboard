@@ -72,7 +72,7 @@ button:disabled {
   align-items: flex-start;
   display: flex;
   gap: 6px;
-  opacity: 0.16;
+  opacity: 0.34;
   transition: opacity 180ms ease;
 }
 
@@ -157,6 +157,29 @@ button:disabled {
 .boards-menu__header strong {
   font-size: 0.92rem;
   font-weight: 600;
+}
+
+.boards-menu__title-input {
+  background: transparent;
+  border: 1px solid transparent;
+  color: rgba(255, 255, 255, 0.96);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin: -4px -6px;
+  min-width: 0;
+  padding: 4px 6px;
+  width: calc(100% + 12px);
+}
+
+.boards-menu__title-input:hover,
+.boards-menu__title-input:focus {
+  border-color: rgba(255, 255, 255, 0.16);
+  outline: none;
+}
+
+.boards-menu__title-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .boards-menu__actions {

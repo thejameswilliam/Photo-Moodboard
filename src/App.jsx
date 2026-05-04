@@ -66,6 +66,7 @@ export default function App() {
   const [boards, setBoards] = useState([]);
   const [currentBoardId, setCurrentBoardId] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
+  const [boardTitleDraft, setBoardTitleDraft] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [uploadItems, setUploadItems] = useState([]);
   const [isBoardActionPending, setIsBoardActionPending] = useState(false);
@@ -98,6 +99,10 @@ export default function App() {
   useEffect(() => {
     currentBoardIdRef.current = currentBoardId;
   }, [currentBoardId]);
+
+  useEffect(() => {
+    setBoardTitleDraft(board?.name || '');
+  }, [board?.id, board?.name]);
 
   useEffect(() => {
     function handlePopState() {
@@ -960,6 +965,46 @@ export default function App() {
     setBoards((currentBoards) => mergeBoardSummary(currentBoards, nextBoard));
   }
 
+  function handleBoardTitleCommit() {
+    if (!board) {
+      return;
+    }
+
+    const nextName = normalizeBoardTitle(boardTitleDraft, board, boards);
+    setBoardTitleDraft(nextName);
+
+    if (nextName === board.name) {
+      return;
+    }
+
+    startTransition(() => {
+      setBoard((currentBoard) => {
+        if (!currentBoard) {
+          return currentBoard;
+        }
+
+        return {
+          ...currentBoard,
+          name: nextName,
+        };
+      });
+    });
+  }
+
+  function handleBoardTitleKeyDown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setBoardTitleDraft(board?.name || '');
+      event.currentTarget.blur();
+    }
+  }
+
   function updateUploadItem(entryId, patch) {
     setUploadItems((currentItems) => currentItems.map((item) => (
       item.id === entryId
@@ -1268,7 +1313,17 @@ export default function App() {
                   <div className="boards-menu">
                     <div className="boards-menu__header">
                       <span className="boards-menu__eyebrow">Current board</span>
-                      <strong>{board?.name || 'Loading...'}</strong>
+                      <input
+                        className="boards-menu__title-input"
+                        type="text"
+                        value={boardTitleDraft}
+                        onChange={(event) => setBoardTitleDraft(event.target.value)}
+                        onBlur={handleBoardTitleCommit}
+                        onKeyDown={handleBoardTitleKeyDown}
+                        placeholder="Board name"
+                        disabled={isBusy || !board}
+                        aria-label="Board title"
+                      />
                     </div>
 
                     <div className="boards-menu__actions">
@@ -1766,4 +1821,30 @@ function getUploadItemStatusLabel(item) {
   }
 
   return 'Queued';
+}
+
+function normalizeBoardTitle(value, board, boards) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+
+  if (trimmed) {
+    return trimmed;
+  }
+
+  return getDefaultBoardNameForClient(board, boards);
+}
+
+function getDefaultBoardNameForClient(board, boards) {
+  const currentName = board?.name || '';
+  const currentMatch = /^Board\s+(\d+)$/i.exec(currentName);
+
+  if (currentMatch) {
+    return `Board ${currentMatch[1]}`;
+  }
+
+  const highestBoardNumber = (Array.isArray(boards) ? boards : []).reduce((highest, boardSummary) => {
+    const match = /^Board\s+(\d+)$/i.exec(boardSummary?.name || '');
+    return match ? Math.max(highest, Number(match[1])) : highest;
+  }, 0);
+
+  return `Board ${highestBoardNumber + 1}`;
 }

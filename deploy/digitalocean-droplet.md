@@ -1,5 +1,15 @@
 # DigitalOcean Droplet Setup
 
+## Current Live Reference
+
+- App URL: `https://mood.thejameswilliam.com`
+- Mailgun domain: `mg.thejameswilliam.com`
+- Mail sender: `Moodboard <mood@mg.thejameswilliam.com>`
+- Deploy user: `james`
+- App code path: `/srv/moodboard/current`
+- Runtime data path: `/var/lib/moodboard`
+- Service name: `moodboard`
+
 ## Recommended shape
 
 - Ubuntu 24.04 droplet
@@ -10,11 +20,14 @@
 
 ## 1. Create a deploy user and folders
 
+For the current live server, the deploy user is `james`.
+
 ```bash
-sudo adduser --system --group --home /srv/moodboard moodboard
+sudo adduser james
+sudo usermod -aG sudo james
 sudo mkdir -p /srv/moodboard/current
 sudo mkdir -p /var/lib/moodboard
-sudo chown -R moodboard:www-data /srv/moodboard /var/lib/moodboard
+sudo chown -R james:james /srv/moodboard /var/lib/moodboard
 ```
 
 ## 2. Install Node and Nginx
@@ -47,9 +60,9 @@ Copy [.env.example](/Users/thejameswilliam/Documents/Sites/Moodboard/.env.exampl
 - `SQLITE_PATH=/var/lib/moodboard/moodboard.sqlite`
 - `SESSION_SECRET=<long random secret>`
 - `MAILGUN_API_KEY=<your mailgun API key>`
-- `MAILGUN_DOMAIN=<your sending domain>`
-- `MAILGUN_REGION=us` or `eu`
-- `MAIL_FROM=<verified sender>`
+- `MAILGUN_DOMAIN=mg.thejameswilliam.com`
+- `MAILGUN_REGION=us`
+- `MAIL_FROM=Moodboard <mood@mg.thejameswilliam.com>`
 
 ## 5. Install the systemd unit
 

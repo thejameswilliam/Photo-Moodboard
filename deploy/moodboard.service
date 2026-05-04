@@ -4,8 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=moodboard
-Group=www-data
+# Current production deploy user is `james`.
+# Change these if the app is moved to a different server/user.
+User=james
+Group=james
 WorkingDirectory=/srv/moodboard/current
 EnvironmentFile=/etc/moodboard.env
 ExecStart=/usr/bin/npm start

@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+data/board.json
+data/boards/*
+!data/boards/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep

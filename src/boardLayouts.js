@@ -88,6 +88,19 @@ export function updateBoardLayoutItems(board, layoutId, items) {
   };
 }
 
+export function resetLayoutToDefault(board, layoutId, viewport) {
+  const nextLayout = buildLayoutFromAssets(board.assets || [], layoutId, viewport);
+
+  return {
+    ...board,
+    layouts: {
+      ...board.layouts,
+      [layoutId]: nextLayout,
+    },
+    updatedAt: nextLayout.updatedAt,
+  };
+}
+
 export function setActiveLayout(board, layoutId, viewport) {
   const ensuredBoard = ensureLayoutExists(board, layoutId, viewport);
 

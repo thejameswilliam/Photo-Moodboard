@@ -29,6 +29,7 @@ import {
   getVisibleItems,
   prepareBoardForClient,
   removeAssetIdsFromBoard,
+  resetLayoutToDefault,
   setActiveLayout,
   updateBoardLayoutItems,
 } from './boardLayouts';
@@ -847,6 +848,25 @@ export default function App() {
     setSelectedItemId(null);
   }
 
+  function handleRelayout() {
+    if (readOnly || !board) {
+      return;
+    }
+
+    startTransition(() => {
+      setBoard((currentBoard) => {
+        if (!currentBoard) {
+          return currentBoard;
+        }
+
+        return resetLayoutToDefault(currentBoard, currentBoard.activeLayout, getBoardViewport(boardRef.current));
+      });
+    });
+
+    interactionRef.current = null;
+    setSelectedItemId(null);
+  }
+
   function handleDragState(event) {
     if (!containsFiles(event.dataTransfer)) {
       return;
@@ -1401,6 +1421,17 @@ export default function App() {
               {option.label}
             </button>
           ))}
+
+          {isOwnerView ? (
+            <button
+              className="toolbar__button"
+              type="button"
+              onClick={handleRelayout}
+              disabled={isBusy || !board || countBoardAssets(board) === 0}
+            >
+              Re-layout
+            </button>
+          ) : null}
 
           {isSharedView && !sessionState.user ? (
             <button
